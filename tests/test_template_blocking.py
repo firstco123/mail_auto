@@ -19,7 +19,7 @@ from src.scheduling.followup_scheduler import FollowupScheduler
 
 def _store(blocking_for=None, errors=None):
     s = MagicMock()
-    s.blocking_errors.side_effect = lambda kind: (
+    s.blocking_errors.side_effect = lambda kind, vacancy=None: (
         ["差し込み項目 {物件名称} は使用できません。"] if kind == blocking_for else [])
     s.all_errors.return_value = errors if errors is not None else (
         {blocking_for: ["差し込み項目 {物件名称} は使用できません。"]} if blocking_for else {})
@@ -96,7 +96,8 @@ class TestStatusIsPublishedForThePanel(unittest.TestCase):
         p = _processor(store)
         p._templates_ready()
         store.all_errors.return_value = {ts.FIRST: ["壊れました"]}
-        store.blocking_errors.side_effect = lambda k: ["壊れました"] if k == ts.FIRST else []
+        store.blocking_errors.side_effect = (
+            lambda k, v=None: ["壊れました"] if k == ts.FIRST else [])
         p._templates_ready()
         self.assertEqual(p._sheets.set_config.call_count, 2)
 

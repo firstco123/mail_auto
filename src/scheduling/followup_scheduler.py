@@ -67,6 +67,14 @@ class FollowupScheduler:
         self._interval = int(cfg.get("scan_interval_minutes", 30))
         self._scheduler: BackgroundScheduler | None = None
 
+    def _show_deal_type(self) -> bool:
+        """The 設定 switch, read at send time so it needs no restart."""
+        try:
+            v = self._sheets.read_config_value("取引態様をメールに表示")
+        except Exception:
+            return True          # the duty applies until told otherwise
+        return v.strip().lower() not in ("false", "no", "off", "いいえ")
+
     # ── lifecycle ────────────────────────────────────────────────────────────
 
     def start(self) -> None:
@@ -140,20 +148,33 @@ class FollowupScheduler:
             return
 
         prop = self._resolve_property(inquiry)
-        inquiry.matched_property = prop
-        if inquiry.is_vacant is None and prop is not None:
+        if prop is not None:
+            # Confirm against WordPress now, not against the snapshot and not
+            # against what was true at intake. A 2nd mail goes out two days
+            # later and a 3rd five; the room may have gone in between, and the
+            # vacancy decides which template is used and what the mail asserts.
+            fresh = self._wp.refetch_one(prop.wp_id)
+            if fresh is not None:
+                if fresh.is_vacant != prop.is_vacant:
+                    logger.info("Vacancy changed since intake for %s: %s → %s",
+                                inquiry.id, prop.is_vacant, fresh.is_vacant)
+                prop = fresh
             inquiry.is_vacant = prop.is_vacant
+        inquiry.matched_property = prop
 
         intro, invitation, alt_intros = self._build_segments(inquiry, prop)
         ai_segments = [s for s in [intro, invitation,
                                    *(t for _, t in alt_intros)] if s and s.strip()]
         assembler = EmailAssembler(self._company, is_business_hours(),
-                                   templates=self._templates)
+                                   templates=self._templates,
+                                   show_deal_type=self._show_deal_type())
         # A broken 2nd/3rd template must not send the previous wording, and must
         # not consume the scheduled slot either: leave 次回追客予定日 untouched so
         # this retries once the sheet is fixed.
         if self._templates is not None:
-            blocking = self._templates.blocking_errors(mail_type)
+            from src.email_builder import template_store as _ts
+            blocking = self._templates.blocking_errors(
+                mail_type, _ts.vacancy_key(inquiry.is_vacant))
             if blocking:
                 logger.error("%s template unusable — leaving %s scheduled: %s",
                              mail_type, inquiry.id, "; ".join(blocking))

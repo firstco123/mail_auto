@@ -167,3 +167,38 @@ class TestSuppressionList(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDealTypeDisplayToggle(unittest.TestCase):
+    """Whether 第34条 is met by the linked page is the client's legal call.
+
+    They asked to settle it with their adviser and then switch, so the display
+    is a 設定 cell rather than a deploy (2026-10-15).
+    """
+
+    def test_shown_by_default(self):
+        _, body = EmailAssembler(CO, True).build_first_mail_parts(
+            _inq(_prop("媒介（一般）")), "紹介文", "", [])
+        self.assertIn("取引態様：媒介（一般）", body)
+
+    def test_hidden_when_switched_off(self):
+        _, body = EmailAssembler(CO, True, show_deal_type=False).build_first_mail_parts(
+            _inq(_prop("媒介（一般）")), "紹介文", "", [])
+        self.assertNotIn("取引態様", body)
+
+    def test_the_property_name_and_url_survive_being_switched_off(self):
+        _, body = EmailAssembler(CO, True, show_deal_type=False).build_first_mail_parts(
+            _inq(_prop("媒介（一般）")), "紹介文", "", [])
+        self.assertIn("物件名：物件A", body)
+        self.assertIn("https://x/p/", body)
+
+    def test_follow_ups_honour_the_switch(self):
+        _, body = EmailAssembler(CO, True, show_deal_type=False).build_second_mail_parts(
+            _inq(_prop("媒介（専任）")), "紹介文", "", [])
+        self.assertNotIn("取引態様", body)
+
+    def test_the_opt_out_notice_is_unaffected(self):
+        """Different statute, separate switch — turning one off keeps the other."""
+        _, body = EmailAssembler(CO, True, show_deal_type=False).build_first_mail_parts(
+            _inq(_prop("媒介（一般）")), "紹介文", "", [])
+        self.assertIn("配信停止", body)

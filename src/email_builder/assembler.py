@@ -79,9 +79,11 @@ class EmailAssembler:
     All fixed sections (company info, URLs, signature) are never touched by AI.
     """
 
-    def __init__(self, company: dict, is_business_hours: bool, templates=None):
+    def __init__(self, company: dict, is_business_hours: bool, templates=None,
+                 show_deal_type: bool = True):
         self._co = company
         self._in_hours = is_business_hours
+        self._show_deal_type = show_deal_type
         # A TemplateStore, or None to always use the built-in text. `usable()`
         # returns None for an unconfigured mail, which is the normal case until
         # the client edits the sheet — a *broken* template never reaches here,
@@ -93,7 +95,9 @@ class EmailAssembler:
         """(subject, body) from the operator's template, or None to use built-in."""
         if self._templates is None:
             return None
-        tpl = self._templates.usable(kind)
+        # Chosen from vacancy as known right now — for a follow-up that is the
+        # live re-check made moments ago, not what was true at intake.
+        tpl = self._templates.usable(kind, ts.vacancy_key(inquiry.is_vacant))
         if tpl is None:
             return None
         prop = inquiry.matched_property
@@ -104,10 +108,30 @@ class EmailAssembler:
             "AI紹介文": property_intro,
             "最寄駅": self._station_text(prop),
             "担当者名": self._staff_name,
-            "署名": _SIGNATURE,
+            "署名": self._signature(),
             "物件情報": self._property_section(inquiry, property_intro, alt_intros),
         }
         return ts.render(tpl.subject, ctx), ts.render(tpl.body, ctx)
+
+    def _signature(self) -> str:
+        """The operator's signature when they have written one.
+
+        Applies to the built-in bodies too: editing 署名 must change every mail,
+        not only those whose body template has also been customised.
+        """
+        if self._templates is not None:
+            edited = self._templates.signature()
+            if edited:
+                return edited
+        return _SIGNATURE
+
+    def _opt_out_text(self) -> str:
+        """The operator's 配信停止 notice, falling back to the built-in one."""
+        if self._templates is not None:
+            edited = self._templates.opt_out()
+            if edited:
+                return edited
+        return fb.OPT_OUT
 
     def _property_section(self, inquiry: Inquiry, property_intro: str,
                           alt_intros: list[tuple[Property, str]]) -> str:
@@ -235,16 +259,23 @@ class EmailAssembler:
 
         if not self._in_hours:
             body.append(_OUT_OF_HOURS_NOTE)
-        body.append(fb.OPT_OUT)
-        body.append(_SIGNATURE)
+        body.append(self._opt_out_text())
+        body.append(self._signature())
         return subject, _join_blocks(body)
 
     def _header_name(self, customer_name: str) -> str:
         return f"{customer_name}様"
 
-    @staticmethod
-    def _deal_line(prop: Property | None) -> str:
-        """The 取引態様 line, or "" when the listing does not state one."""
+    def _deal_line(self, prop: Property | None) -> str:
+        """The 取引態様 line, or "" when it is not shown or not known.
+
+        Switchable from the 設定 sheet: whether 宅建業法第34条 is satisfied by the
+        linked listing page rather than repeating it in the mail is the client's
+        legal call, not ours, and they wanted to be able to act on their
+        adviser's answer without waiting for a deploy.
+        """
+        if not self._show_deal_type:
+            return ""
         if prop is None or not prop.deal_type:
             return ""
         return fb.DEAL_TYPE_LINE.format(deal_type=prop.deal_type)
@@ -340,8 +371,8 @@ class EmailAssembler:
             f"{inquiry.customer_name}様にピッタリなお部屋をしっかりとご紹介させて頂きます！\n"
             "ご返事お待ちしていますので、よろしくお願い申し上げます。",
             hours_note,
-            fb.OPT_OUT,
-            _SIGNATURE,
+            self._opt_out_text(),
+            self._signature(),
         ])
 
     def _alternatives_body(self, inquiry: Inquiry,
@@ -374,8 +405,8 @@ class EmailAssembler:
             f"{inquiry.customer_name}様にピッタリなお部屋をしっかりとご紹介させて頂きます！\n"
             "ご返事お待ちしていますので、よろしくお願い申し上げます。",
             hours_note,
-            fb.OPT_OUT,
-            _SIGNATURE,
+            self._opt_out_text(),
+            self._signature(),
         ])
 
     @staticmethod

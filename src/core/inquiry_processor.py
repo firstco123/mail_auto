@@ -99,6 +99,10 @@ class InquiryProcessor:
         # Refreshed once per cycle; added to immediately when an opt-out arrives
         # so a later mail in the same batch already sees it.
         self._suppressed: set[str] = set()
+        # 取引態様 display, re-read each cycle from the 設定 sheet so the client
+        # can act on their adviser's answer without a deploy. Default on: the
+        # statutory duty is on us until they establish otherwise.
+        self._show_deal_type = True
         followup_cfg = followup_cfg or {}
         self._followup_enabled = followup_cfg.get("enabled", False)
         steps = followup_cfg.get("steps", [{"days": 2}])
@@ -134,6 +138,9 @@ class InquiryProcessor:
             # cycle: the mail stays unread and is picked up once Sheets recovers.
             logger.exception("Could not read the suppression list — skipping cycle")
             return
+
+        self._show_deal_type = self._sheets.read_config_value(
+            "取引態様をメールに表示") .strip().lower() not in ("false", "no", "off", "いいえ")
 
         self._refresh_listings()
         self._sweep_interrupted()
@@ -567,7 +574,8 @@ class InquiryProcessor:
                 alt_intros.append((alt, alt_text))
 
         assembler = EmailAssembler(self._company, is_business_hours(),
-                                   templates=self._templates)
+                                   templates=self._templates,
+                                   show_deal_type=self._show_deal_type)
         subject, body_plain = assembler.build_first_mail_parts(
             inquiry, intro, invitation, alt_intros)
         ai_segments = [s for s in [intro, invitation,

@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 import gspread
 from google.oauth2.service_account import Credentials
 
-from src.core.models import Inquiry, Property
+from src.core.models import Inquiry, Property  # noqa: F401
 from src.email_builder import template_store as ts
 from src.email_builder.assembler import EmailAssembler
 
@@ -69,22 +69,39 @@ def _to_template(text: str, signature: str, staff: str = "") -> str:
     return out
 
 
-def current_wording(company: dict) -> dict[str, tuple[str, str]]:
-    """{kind: (subject, body)} for the built-in mails, as editable templates."""
+def _alt_property() -> Property:
+    """A recommendation offered when the enquired room is gone."""
+    return Property(
+        wp_id=2, name="おすすめ物件", url="〘ALTURL〙", rent=58000,
+        management_fee=0, layout="1K", nearest_station="", train_line="名鉄本線",
+        city="知立市", walk_minutes=10, category=[], equipment=[], is_vacant=True,
+        is_commission_free=False, area_sqm=28.0, building_type="",
+        building_name="おすすめ物件", room_number="201", address="", access="")
+
+
+def current_wording(company: dict) -> dict[tuple[str, str], tuple[str, str]]:
+    """{(kind, vacancy): (subject, body)} for the built-in mails."""
     from src.email_builder.assembler import _SIGNATURE
-    inq = _sample_inquiry()
+    staff = str(company.get("staff_name", ""))
     a = EmailAssembler(company, True)
     out = {}
     for kind, build in ((ts.FIRST, a.build_first_mail_parts),
                         (ts.SECOND, a.build_second_mail_parts),
                         (ts.THIRD, a.build_third_mail_parts)):
-        subject, body = build(inq, _MARK["AI紹介文"], "", [])
-        # The property block is data-shaped; one placeholder stands for it.
-        section = a._property_section(inq, _MARK["AI紹介文"], [])
-        body = body.replace(section.strip(), "{物件情報}")
-        staff = str(company.get("staff_name", ""))
-        out[kind] = (_to_template(subject, _SIGNATURE, staff),
-                     _to_template(body, _SIGNATURE, staff))
+        for vacancy in ts.VACANCIES:
+            inq = _sample_inquiry()
+            vacant = vacancy == ts.VACANT
+            inq.is_vacant = vacant
+            alts = [] if vacant else [(_alt_property(), _MARK["AI紹介文"])]
+            subject, body = build(inq, _MARK["AI紹介文"] if vacant else "", "", alts)
+            # The property section is data-shaped; one placeholder stands for it
+            # so the operator never has to hand-write a recommendation list.
+            section = a._property_section(
+                inq, _MARK["AI紹介文"] if vacant else "", alts)
+            if section.strip():
+                body = body.replace(section.strip(), "{物件情報}")
+            out[(kind, vacancy)] = (_to_template(subject, _SIGNATURE, staff),
+                                    _to_template(body, _SIGNATURE, staff))
     return out
 
 
@@ -100,10 +117,17 @@ def build_rows(company: dict) -> list[list[str]]:
     rows.append(["■ 差し込み項目", "下記の項目が件名・本文で使用できます（半角の { } で記述）"])
     rows.extend(ts.placeholder_help())
     rows.append(["", ""])
-    rows.append(["■ 編集欄", "ここから下を編集してください（空欄＝標準文面）"])
+    rows.append(["■ 編集欄（共通）", "すべてのメールに共通する部分です"])
+    rows.append([ts.SIGNATURE_ROW, ""])
+    rows.append([ts.OPT_OUT_ROW, ""])
+    rows.append(["", ""])
+    rows.append(["■ 編集欄（メール別）",
+                 "空室あり・空室なしで文面が切り替わります。"
+                 "空欄＝標準文面。送信直前の空室状況で判定されます。"])
     for kind in ts.KINDS:
-        rows.append([ts.SUBJECT_ROW[kind], ""])
-        rows.append([ts.BODY_ROW[kind], ""])
+        for vacancy in ts.VACANCIES:
+            rows.append([ts.SUBJECT_ROW[(kind, vacancy)], ""])
+            rows.append([ts.BODY_ROW[(kind, vacancy)], ""])
     rows.append(["", ""])
     rows.append(["■ 参考：現在の文面",
                  "下記は現在使用されている文面です。変更したい場合は、"
@@ -111,9 +135,14 @@ def build_rows(company: dict) -> list[list[str]]:
                  "（この行自体はシステムには使用されません）"])
     wording = current_wording(company)
     for kind in ts.KINDS:
-        subject, body = wording[kind]
-        rows.append([f"（参考）{ts.SUBJECT_ROW[kind]}", subject])
-        rows.append([f"（参考）{ts.BODY_ROW[kind]}", body])
+        for vacancy in ts.VACANCIES:
+            subject, body = wording[(kind, vacancy)]
+            rows.append([f"（参考）{ts.SUBJECT_ROW[(kind, vacancy)]}", subject])
+            rows.append([f"（参考）{ts.BODY_ROW[(kind, vacancy)]}", body])
+    from src.email_builder.assembler import _SIGNATURE
+    from src.email_builder import followup_blocks as _fb
+    rows.append([f"（参考）{ts.SIGNATURE_ROW}", _SIGNATURE])
+    rows.append([f"（参考）{ts.OPT_OUT_ROW}", _fb.OPT_OUT])
     return rows
 
 

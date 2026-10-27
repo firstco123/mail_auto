@@ -43,6 +43,9 @@ class TestSendFollowup(unittest.TestCase):
         scorer = MagicMock()
         scorer.find_alternatives.return_value = []
         wp = MagicMock()
+        # Re-reading the listing is a live call; returning None keeps the
+        # resolved property, which is the documented fallback.
+        wp.refetch_one.return_value = None
         wp.get_property_by_url.return_value = _prop(vacant=True)
         gmail = MagicMock()
         gmail.send.return_value = "<sent-mid@rentmagazine.jp>"
@@ -108,6 +111,9 @@ class TestFollowupContentScreening(unittest.TestCase):
         scorer = MagicMock()
         scorer.find_alternatives.return_value = []
         wp = MagicMock()
+        # Re-reading the listing is a live call; returning None keeps the
+        # resolved property, which is the documented fallback.
+        wp.refetch_one.return_value = None
         wp.get_property_by_url.return_value = _prop(vacant=True)
         gmail = MagicMock()
         gmail.send.return_value = "<sent-mid@rentmagazine.jp>"

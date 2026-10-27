@@ -1,4 +1,5 @@
 from __future__ import annotations
+import html
 import logging
 import re
 import time
@@ -357,7 +358,10 @@ class WordPressClient:
                     if not terms:
                         break
                     for t in terms:
-                        all_terms[t["id"]] = t["name"]
+                        # WordPress returns these HTML-encoded, so a building
+                        # named 「&(アンパサンド)」 arrives as 「&amp;(アンパサンド)」
+                        # and would reach a customer that way.
+                        all_terms[t["id"]] = html.unescape(t["name"])
                     if len(terms) < 100:
                         break
                     page += 1
@@ -432,7 +436,7 @@ class WordPressClient:
         # one such post used to abort the whole startup load.
         return Property(
             wp_id=raw.get("id") or 0,
-            name=(raw.get("title") or {}).get("rendered") or "",
+            name=html.unescape((raw.get("title") or {}).get("rendered") or ""),
             url=raw.get("link") or "",
             rent=_int(acf_get("rent", 0)),
             management_fee=_int(acf_get("management_fee", 0)),

@@ -36,7 +36,8 @@ def _rows(**kw):
     out = []
     for k, v in kw.items():
         kind, part = k.rsplit("_", 1)
-        row = (ts.SUBJECT_ROW if part == "subject" else ts.BODY_ROW)[name[kind]]
+        row = (ts.SUBJECT_ROW if part == "subject"
+               else ts.BODY_ROW)[(name[kind], ts.VACANT)]
         out.append({"テンプレート名": row, "内容": v})
     return out
 

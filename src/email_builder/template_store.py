@@ -28,9 +28,26 @@ logger = logging.getLogger(__name__)
 FIRST, SECOND, THIRD = "1st", "2nd", "3rd"
 KINDS = (FIRST, SECOND, THIRD)
 
-# Row names in the テンプレート sheet, per mail.
-SUBJECT_ROW = {FIRST: "1stメール_件名", SECOND: "2ndメール_件名", THIRD: "3rdメール_件名"}
-BODY_ROW = {FIRST: "1stメール_本文", SECOND: "2ndメール_本文", THIRD: "3rdメール_本文"}
+# An available room and an unavailable one call for genuinely different mails —
+# one invites a viewing, the other reports the room is gone and offers
+# alternatives — so each is edited separately rather than sharing a body with a
+# switching placeholder (client, 2026-10-27).
+VACANT, UNAVAILABLE = "空室あり", "空室なし"
+VACANCIES = (VACANT, UNAVAILABLE)
+
+SUBJECT_ROW = {(k, v): f"{k}メール_件名（{v}）" for k in KINDS for v in VACANCIES}
+BODY_ROW = {(k, v): f"{k}メール_本文（{v}）" for k in KINDS for v in VACANCIES}
+
+# Shared across every mail. Previously fixed in code, which made them
+# uneditable even though they are auto-inserted into the body.
+SIGNATURE_ROW = "署名"
+OPT_OUT_ROW = "配信停止案内"
+
+
+def vacancy_key(is_vacant) -> str:
+    """Which variant applies. Unknown vacancy is treated as unavailable, since
+    that wording never asserts a room is still free."""
+    return VACANT if is_vacant else UNAVAILABLE
 
 # What the operator may write. Anything else is a mistake, not a literal: a stray
 # 「{物件名称}」 would otherwise reach a customer verbatim.
@@ -58,6 +75,7 @@ class Template:
     subject: str
     body: str
     errors: list[str] = field(default_factory=list)
+    vacancy: str = ""
 
     @property
     def is_valid(self) -> bool:
@@ -146,7 +164,10 @@ class TemplateStore:
     def __init__(self, sheets, checker=None):
         self._sheets = sheets
         self._checker = checker
-        self._templates: dict[str, Template] = {}
+        self._templates: dict[tuple[str, str], Template] = {}
+        self._signature: str = ""
+        self._opt_out: str = ""
+        self._shared_errors: list[str] = []
         self._read_error: str = ""
 
     # ── loading ─────────────────────────────────────────────────────────────
@@ -165,20 +186,64 @@ class TemplateStore:
 
         values = {str(r.get("テンプレート名", "")).strip(): str(r.get("内容", ""))
                   for r in rows}
-        loaded: dict[str, Template] = {}
+        loaded: dict[tuple[str, str], Template] = {}
         for kind in KINDS:
-            subject = values.get(SUBJECT_ROW[kind], "")
-            body = values.get(BODY_ROW[kind], "")
-            tpl = Template(kind=kind, subject=subject, body=body)
-            if tpl.is_configured:
-                tpl.errors = validate(subject, body, kind)
-                tpl.errors += self._content_errors(tpl)
-            loaded[kind] = tpl
+            for vacancy in VACANCIES:
+                subject = values.get(SUBJECT_ROW[(kind, vacancy)], "")
+                body = values.get(BODY_ROW[(kind, vacancy)], "")
+                tpl = Template(kind=kind, subject=subject, body=body,
+                               vacancy=vacancy)
+                if tpl.is_configured:
+                    tpl.errors = validate(subject, body, f"{kind}（{vacancy}）")
+                    tpl.errors += self._content_errors(tpl)
+                loaded[(kind, vacancy)] = tpl
         self._templates = loaded
 
-        broken = [k for k, t in loaded.items() if t.is_configured and not t.is_valid]
-        if broken:
-            logger.warning("Templates with errors: %s", ", ".join(broken))
+        self._signature = str(values.get(SIGNATURE_ROW, "") or "")
+        self._opt_out = str(values.get(OPT_OUT_ROW, "") or "")
+        self._shared_errors = self._validate_shared()
+
+        broken = [f"{k}（{v}）" for (k, v), t in loaded.items()
+                  if t.is_configured and not t.is_valid]
+        if broken or self._shared_errors:
+            logger.warning("Templates with errors: %s",
+                           ", ".join(broken + list(self._shared_errors)))
+
+    def _validate_shared(self) -> list[str]:
+        """Check the signature and opt-out blocks.
+
+        They take no placeholders: a signature containing {署名} would nest into
+        itself, and both are plain blocks of company text.
+        """
+        errors: list[str] = []
+        for label, text in (("署名", self._signature),
+                            ("配信停止案内", self._opt_out)):
+            if not text.strip():
+                continue
+            for name in _TOKEN.findall(text):
+                errors.append(
+                    f"{label}には差し込み項目（{{{name.strip()}}}）を使用できません。")
+            if any(b in text for b in _FULLWIDTH_BRACES):
+                errors.append(f"{label}に全角の｛｝が使われています。")
+            if self._checker is not None:
+                try:
+                    result = self._checker.check(text)
+                    if not result.is_clean:
+                        words = "、".join(h.word for h in result.ng_hits)
+                        errors.append(
+                            f"{label}の文面に問題が検出されました"
+                            f"（{words or result.discriminatory_reason}）。")
+                except Exception:
+                    logger.exception("Could not screen %s", label)
+        return errors
+
+    def signature(self) -> str:
+        """Operator's signature, or "" to use the built-in one."""
+        return self._signature if self._signature.strip() else ""
+
+    def opt_out(self) -> str:
+        """Operator's 配信停止 notice, or "" to use the built-in one."""
+        return self._opt_out if self._opt_out.strip() else ""
 
     def _content_errors(self, tpl: Template) -> list[str]:
         """Screen the operator's own wording for NG words and discriminatory text."""
@@ -200,29 +265,40 @@ class TemplateStore:
 
     # ── querying ────────────────────────────────────────────────────────────
 
-    def usable(self, kind: str) -> Template | None:
+    def usable(self, kind: str, vacancy: str = VACANT) -> Template | None:
         """The template to use, or None to fall back to the built-in text.
 
         None means *not configured*, never *broken* — callers must check
         `blocking_errors` first and refuse to send while anything is broken.
         """
-        tpl = self._templates.get(kind)
+        tpl = self._templates.get((kind, vacancy))
         if tpl is None or not tpl.is_configured or not tpl.is_valid:
             return None
         return tpl
 
-    def blocking_errors(self, kind: str) -> list[str]:
-        """Why this mail must not be sent. Empty when it may go out."""
+    def blocking_errors(self, kind: str, vacancy: str | None = None) -> list[str]:
+        """Why this mail must not be sent. Empty when it may go out.
+
+        With no vacancy given, both variants are checked — used at intake, where
+        the mail that will be needed is not yet known.
+        """
         if self._read_error:
             return [self._read_error]
-        tpl = self._templates.get(kind)
-        if tpl is None or not tpl.is_configured:
-            return []
-        return list(tpl.errors)
+        errors = list(self._shared_errors)
+        wanted = (vacancy,) if vacancy else VACANCIES
+        for v in wanted:
+            tpl = self._templates.get((kind, v))
+            if tpl is not None and tpl.is_configured:
+                errors += tpl.errors
+        return errors
 
     def all_errors(self) -> dict[str, list[str]]:
-        """Every problem across all three mails, for the dashboard banner."""
+        """Every problem across all mails, for the dashboard banner."""
         if self._read_error:
             return {"テンプレート": [self._read_error]}
-        return {k: list(t.errors) for k, t in self._templates.items()
-                if t.is_configured and t.errors}
+        out = {f"{k}（{v}）": list(t.errors)
+               for (k, v), t in self._templates.items()
+               if t.is_configured and t.errors}
+        if self._shared_errors:
+            out["署名・配信停止案内"] = list(self._shared_errors)
+        return out

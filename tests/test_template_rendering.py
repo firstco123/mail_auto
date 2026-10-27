@@ -48,8 +48,10 @@ def _inquiry(vacant=True, prop=None):
 def _store(subject, body, kind=ts.FIRST):
     sheets = MagicMock()
     sheets.read_templates.return_value = [
-        {"テンプレート名": ts.SUBJECT_ROW[kind], "内容": subject},
-        {"テンプレート名": ts.BODY_ROW[kind], "内容": body},
+        row for v in ts.VACANCIES for row in (
+            {"テンプレート名": ts.SUBJECT_ROW[(kind, v)], "内容": subject},
+            {"テンプレート名": ts.BODY_ROW[(kind, v)], "内容": body},
+        )
     ]
     s = ts.TemplateStore(sheets)
     s.refresh()
