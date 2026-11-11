@@ -96,6 +96,7 @@ class InquiryProcessor:
         self._wp_refresh_minutes = int(wp_refresh_minutes)
         self._templates = templates
         self._last_template_status = None
+        self._last_ai_status = None
         # Refreshed once per cycle; added to immediately when an opt-out arrives
         # so a later mail in the same batch already sees it.
         self._suppressed: set[str] = set()
@@ -189,6 +190,18 @@ class InquiryProcessor:
         if errors:
             status = " / ".join(f"{kind}: {'; '.join(msgs)}"
                                 for kind, msgs in errors.items())
+        # Published separately: "the AI check could not run" is an operational
+        # problem the client must fix (API credit), not a fault in their wording,
+        # and showing it as a template error sent them hunting for bad text that
+        # was never there.
+        ai_status = ("AI判定を実行できませんでした（Claude APIの残高不足などが考えられます）。"
+                     "NGワードの検査のみ実施しています。"
+                     if self._templates.check_unavailable() else self._TEMPLATE_OK)
+        if ai_status != self._last_ai_status:
+            self._sheets.set_config("AI判定状態", ai_status,
+                                    "差別表現チェックの実行状況（システムが自動更新）")
+            self._last_ai_status = ai_status
+
         if status != self._last_template_status:
             # Written only on change: the panel reads this, and rewriting an
             # unchanged cell every five minutes is pointless Sheets traffic.

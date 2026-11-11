@@ -136,9 +136,11 @@ DEAL_TYPE_LINE = "\n取引態様：{deal_type}"
 # they are 広告メール and must show how to refuse further ones. Reply-based, so
 # the refusal address is the sending address itself — and a reply already stops
 # the sequence, which makes the promise true the day it ships.
-OPT_OUT = """\
-※今後このようなご案内が不要な場合は、本メールへのご返信にて
-　「配信停止」とお知らせください。以後の送信を停止いたします。"""
+# Deliberately one line. The hard break and leading 全角 space that used to sit
+# before 「配信停止」 re-wrapped badly on a phone, leaving a stray indent mid
+# sentence; the rest of the mail keeps the client's own line breaks.
+OPT_OUT = ("※今後このようなご案内が不要な場合は、本メールへのご返信にて"
+           "「配信停止」とお知らせください。以後の送信を停止いたします。")
 
 NEAREST_STATION = "【最寄駅】{line}「{station}」"
 

@@ -112,6 +112,10 @@ class TestContentScreening(unittest.TestCase):
         r.ng_hits = [MagicMock(word=w) for w in words]
         r.discriminatory = disc
         r.discriminatory_reason = "外国籍を理由に排除"
+        r.complaint = False
+        r.complaint_reason = ""
+        # The AI judgement succeeded; only its verdict is under test.
+        r.check_failed = False
         c.check.return_value = r
         return c
 

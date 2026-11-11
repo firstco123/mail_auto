@@ -124,7 +124,8 @@ class ContentChecker:
         """
         normalized = unicodedata.normalize("NFKC", text)
         ng_hits = self._scan_ng(normalized, stage)
-        disc, disc_reason, complaint, complaint_reason = self._check_context(text)
+        (disc, disc_reason, complaint,
+         complaint_reason, failed) = self._check_context(text)
 
         # Only 強制停止 matches hold the mail by themselves. 文脈判定 matches are
         # still reported — the operator should see that 審査 was present and that
@@ -139,6 +140,7 @@ class ContentChecker:
             discriminatory_reason=disc_reason,
             complaint=complaint,
             complaint_reason=complaint_reason,
+            check_failed=failed,
         )
 
     def check_generated(self, segments: list[str]) -> CheckResult:
@@ -185,8 +187,11 @@ class ContentChecker:
         """
         Judge both context questions in one call.
 
-        Returns (discriminatory, reason, complaint, complaint_reason).
-        On API error defaults to discriminatory=True — safe-fail to 要確認.
+        Returns (discriminatory, reason, complaint, complaint_reason, failed).
+        On API error returns failed=True and discriminatory=True: an inquiry
+        we could not judge still needs a person. The flag lets callers tell
+        "we found a problem" from "we could not look", which are different
+        facts and need different handling.
 
         Both judgements ride on a single request: they read the same text, and
         splitting them would double the per-mail API cost for no benefit.
@@ -210,10 +215,10 @@ class ContentChecker:
                     logger.info("Discriminatory expression detected: %s", reason)
                 if complaint:
                     logger.info("Complaint / dissatisfaction detected: %s", complaint_reason)
-                return disc, reason, complaint, complaint_reason
+                return disc, reason, complaint, complaint_reason, False
             except json.JSONDecodeError:
                 logger.warning("Context check attempt %d: JSON parse error", attempt + 1)
             except Exception as e:
                 logger.warning("Context check attempt %d error: %s", attempt + 1, e)
         logger.error("Context check failed after 3 attempts — defaulting to requires_review")
-        return True, "判定エラー（要確認）", False, ""
+        return True, "判定エラー（要確認）", False, "", True

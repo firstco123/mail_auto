@@ -18,6 +18,7 @@ the placeholders. Three rules shape this module:
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import unicodedata
@@ -169,6 +170,13 @@ class TemplateStore:
         self._opt_out: str = ""
         self._shared_errors: list[str] = []
         self._read_error: str = ""
+        # Verdicts keyed by text, so unchanged wording is not re-screened.
+        self._screened: dict[str, list[str]] = {}
+        self._check_unavailable: bool = False
+
+    def check_unavailable(self) -> bool:
+        """True when the AI judgement could not run on this refresh."""
+        return self._check_unavailable
 
     # ── loading ─────────────────────────────────────────────────────────────
 
@@ -184,6 +192,7 @@ class TemplateStore:
             logger.error("Could not read the テンプレート sheet: %s", e)
             return
 
+        self._check_unavailable = False
         values = {str(r.get("テンプレート名", "")).strip(): str(r.get("内容", ""))
                   for r in rows}
         loaded: dict[tuple[str, str], Template] = {}
@@ -226,15 +235,7 @@ class TemplateStore:
             if any(b in text for b in _FULLWIDTH_BRACES):
                 errors.append(f"{label}に全角の｛｝が使われています。")
             if self._checker is not None:
-                try:
-                    result = self._checker.check(text)
-                    if not result.is_clean:
-                        words = "、".join(h.word for h in result.ng_hits)
-                        errors.append(
-                            f"{label}の文面に問題が検出されました"
-                            f"（{words or result.discriminatory_reason}）。")
-                except Exception:
-                    logger.exception("Could not screen %s", label)
+                errors += self._screen(text, label)
         return errors
 
     def signature(self) -> str:
@@ -246,22 +247,53 @@ class TemplateStore:
         return self._opt_out if self._opt_out.strip() else ""
 
     def _content_errors(self, tpl: Template) -> list[str]:
-        """Screen the operator's own wording for NG words and discriminatory text."""
+        """Screen the operator's wording, caching the verdict by content.
+
+        The cache matters: this used to re-screen all eight blocks on every poll
+        cycle, around 1,150 AI calls a day for text that had not changed, which
+        is what exhausted the API credit. Templates change a few times a month.
+        """
         if self._checker is None:
             return []
+        label = f"{tpl.kind}（{tpl.vacancy}）" if tpl.vacancy else tpl.kind
+        return self._screen(f"{tpl.subject}\n{tpl.body}", f"{label}メール")
+
+    def _screen(self, text: str, label: str) -> list[str]:
+        key = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if key in self._screened:
+            return list(self._screened[key])
         try:
-            result = self._checker.check(f"{tpl.subject}\n{tpl.body}")
+            result = self._checker.check(text)
         except Exception as e:
-            logger.error("Could not screen template %s: %s", tpl.kind, e)
+            logger.error("Could not screen %s: %s", label, e)
             return []
+
+        if getattr(result, "check_failed", False):
+            # Could not look, as opposed to looked and found something. Blocking
+            # every mail because the API is unreachable would be a far worse
+            # outcome than sending text the operator wrote and can see. The
+            # keyword scan still ran, and its hits are reported below.
+            self._check_unavailable = True
+            logger.warning("AI judgement unavailable while screening %s", label)
+            errors = ["NGワード：" + "、".join(h.word for h in result.ng_hits)] \
+                if result.ng_hits else []
+            if errors:
+                errors = [f"{label}の文面に{errors[0]}が含まれています。"]
+            return errors
+
         if result.is_clean:
+            self._screened[key] = []
             return []
         reasons = []
         if result.ng_hits:
             reasons.append("NGワード：" + "、".join(h.word for h in result.ng_hits))
-        if getattr(result, "discriminatory", False):
+        if result.discriminatory:
             reasons.append(f"差別的表現の可能性：{result.discriminatory_reason}")
-        return [f"{tpl.kind}メールの文面に問題が検出されました（{' / '.join(reasons)}）。"]
+        if getattr(result, "complaint", False):
+            reasons.append(f"苦情表現の可能性：{result.complaint_reason}")
+        errors = [f"{label}の文面に問題が検出されました（{' / '.join(reasons)}）。"]
+        self._screened[key] = errors
+        return list(errors)
 
     # ── querying ────────────────────────────────────────────────────────────
 

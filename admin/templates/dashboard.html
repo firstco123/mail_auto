@@ -2,6 +2,20 @@
 {% block title %}問い合わせ一覧{% endblock %}
 {% block content %}
 
+{% if ai_warning %}
+<div class="alert alert-warning d-flex align-items-start gap-2" role="alert">
+  <span style="font-size:1.4rem; line-height:1;">⚠️</span>
+  <div>
+    <strong>AIによる差別的表現チェックが実行できていません。</strong>
+    <div class="small mt-1">{{ ai_warning }}</div>
+    <div class="small mt-2 text-muted">
+      テンプレートの文面に問題があるわけではありません。
+      Claude APIの残高をご確認ください。復旧後は自動的に再開します。
+    </div>
+  </div>
+</div>
+{% endif %}
+
 {% if template_error %}
 <div class="alert alert-danger d-flex align-items-start gap-2" role="alert">
   <span style="font-size:1.4rem; line-height:1;">⚠️</span>

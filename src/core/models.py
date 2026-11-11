@@ -81,6 +81,9 @@ class CheckResult:
     # anger or dissatisfaction need a person. Judged by context, not keywords.
     complaint: bool = False
     complaint_reason: str = ""
+    # True when the AI judgement could not be made at all (API
+    # unreachable, no credit). Distinct from "a problem was found".
+    check_failed: bool = False
 
     @property
     def requires_review(self) -> bool:

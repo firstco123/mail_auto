@@ -21,6 +21,7 @@ def _store(blocking_for=None, errors=None):
     s = MagicMock()
     s.blocking_errors.side_effect = lambda kind, vacancy=None: (
         ["差し込み項目 {物件名称} は使用できません。"] if kind == blocking_for else [])
+    s.check_unavailable.return_value = False
     s.all_errors.return_value = errors if errors is not None else (
         {blocking_for: ["差し込み項目 {物件名称} は使用できません。"]} if blocking_for else {})
     return s
@@ -33,6 +34,7 @@ def _processor(store):
     p._checker = MagicMock()
     p._templates = store
     p._last_template_status = None
+    p._last_ai_status = None
     p._wp = MagicMock()
     p._scorer = MagicMock()
     p._wp_refresh_minutes = 30
@@ -74,14 +76,14 @@ class TestStatusIsPublishedForThePanel(unittest.TestCase):
     def test_errors_are_written_to_the_settings_sheet(self):
         p = _processor(_store(blocking_for=ts.FIRST))
         p._templates_ready()
-        key, value = p._sheets.set_config.call_args[0][:2]
-        self.assertEqual(key, InquiryProcessor.TEMPLATE_STATUS_KEY)
-        self.assertIn("物件名称", value)
+        calls = {c[0][0]: c[0][1] for c in p._sheets.set_config.call_args_list}
+        self.assertIn("物件名称", calls[InquiryProcessor.TEMPLATE_STATUS_KEY])
 
     def test_a_healthy_set_publishes_the_ok_marker(self):
         p = _processor(_store())
         p._templates_ready()
-        self.assertEqual(p._sheets.set_config.call_args[0][1],
+        calls = {c[0][0]: c[0][1] for c in p._sheets.set_config.call_args_list}
+        self.assertEqual(calls[InquiryProcessor.TEMPLATE_STATUS_KEY],
                          InquiryProcessor._TEMPLATE_OK)
 
     def test_an_unchanged_status_is_not_rewritten_every_cycle(self):
@@ -89,7 +91,9 @@ class TestStatusIsPublishedForThePanel(unittest.TestCase):
         p._templates_ready()
         p._templates_ready()
         p._templates_ready()
-        self.assertEqual(p._sheets.set_config.call_count, 1)
+        tmpl = [c for c in p._sheets.set_config.call_args_list
+                if c[0][0] == InquiryProcessor.TEMPLATE_STATUS_KEY]
+        self.assertEqual(len(tmpl), 1)
 
     def test_a_change_is_written(self):
         store = _store()
@@ -99,7 +103,9 @@ class TestStatusIsPublishedForThePanel(unittest.TestCase):
         store.blocking_errors.side_effect = (
             lambda k, v=None: ["壊れました"] if k == ts.FIRST else [])
         p._templates_ready()
-        self.assertEqual(p._sheets.set_config.call_count, 2)
+        tmpl = [c for c in p._sheets.set_config.call_args_list
+                if c[0][0] == InquiryProcessor.TEMPLATE_STATUS_KEY]
+        self.assertEqual(len(tmpl), 2)
 
 
 class TestFollowUpsHoldTheirSlot(unittest.TestCase):

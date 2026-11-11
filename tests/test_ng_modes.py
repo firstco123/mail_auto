@@ -25,7 +25,7 @@ def _checker(words, disc=False, complaint=False):
     c.reload_ng_words(words)
     c._check_context = MagicMock(
         return_value=(disc, "差別理由" if disc else "",
-                      complaint, "苦情理由" if complaint else ""))
+                      complaint, "苦情理由" if complaint else "", False))
     return c
 
 

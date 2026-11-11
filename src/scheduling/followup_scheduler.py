@@ -159,6 +159,11 @@ class FollowupScheduler:
                     logger.info("Vacancy changed since intake for %s: %s → %s",
                                 inquiry.id, prop.is_vacant, fresh.is_vacant)
                 prop = fresh
+            if inquiry.is_vacant != prop.is_vacant:
+                # Keep the screen honest: 空室有無 was written at intake and never
+                # revised, so the panel could show あり for a room let days ago.
+                self._sheets.update_vacancy(
+                    inquiry.id, "あり" if prop.is_vacant else "なし")
             inquiry.is_vacant = prop.is_vacant
         inquiry.matched_property = prop
 
@@ -233,11 +238,23 @@ class FollowupScheduler:
     # ── content helpers (mirror InquiryProcessor's draft build) ──────────────
 
     def _resolve_property(self, inquiry: Inquiry) -> Property | None:
+        """Same chain as intake, which this used to skip.
+
+        It went straight from the URL to get_property_by_name, which compares
+        against the post *title* — marketing copy such as 「自分のペースでひとり暮らし」
+        — and so returned nothing for a formal name like 「グランデュール」. With no
+        property the follow-up kept the vacancy recorded days earlier at intake
+        and never re-read the listing, which is how a 2nd mail went out using the
+        空室あり wording while recommending other properties.
+        """
         if inquiry.inquiry_property_url:
             p = self._wp.get_property_by_url(inquiry.inquiry_property_url)
             if p:
                 return p
         if inquiry.inquiry_property_name:
+            p, _ = self._wp.resolve_by_formal_name(inquiry.inquiry_property_name)
+            if p:
+                return p
             return self._wp.get_property_by_name(inquiry.inquiry_property_name)
         return None
 
