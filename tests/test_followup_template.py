@@ -84,7 +84,7 @@ class TestTemplateBlocks(unittest.TestCase):
 
     def test_property_block_with_initial_cost_note(self):
         self.assertIn("◆お問い合わせ物件", self.body)
-        self.assertIn("物件名：ボニートロッサⅠ205", self.body)
+        self.assertIn("物件名／タイトル：ボニートロッサⅠ205", self.body)
         self.assertIn("※上記URL内に初期費用を記載させていただきました", self.body)
 
     def test_ai_intro_present(self):

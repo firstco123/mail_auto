@@ -122,7 +122,7 @@ THIRD_LEAD_AFTER_CALL = """\
 
 PROPERTY_BLOCK = """\
 ◆お問い合わせ物件
-物件名：{name}
+物件名／タイトル：{name}
 
 {url}{deal}
 

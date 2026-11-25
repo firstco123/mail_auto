@@ -79,7 +79,7 @@ class TestFirstMailFromTemplate(unittest.TestCase):
     def test_an_available_room_renders_the_enquired_property(self):
         _, body = self.a.build_first_mail_parts(_inquiry(), "紹介文です", "", [])
         self.assertIn("◆お問い合わせ物件", body)
-        self.assertIn("物件名：ボニートロッサI107", body)
+        self.assertIn("物件名／タイトル：ボニートロッサI107", body)
         self.assertIn("紹介文です", body)
         self.assertNotIn("◆おすすめ物件", body)
 

@@ -42,10 +42,13 @@ def _processor():
     wp.resolve_by_formal_name.return_value = (None, "")
     wp.properties = []
     checker = MagicMock()
+    # A real verdict that happens to stop the mail — not a failed check, which
+    # takes the defer path and deliberately removes the row again.
     checker.check.return_value = MagicMock(is_clean=False, ng_hits=[],
                                            discriminatory=False,
                                            discriminatory_reason="停止",
-                                           complaint=False, complaint_reason="")
+                                           complaint=False, complaint_reason="",
+                                           check_failed=False)
     proc = InquiryProcessor(
         gmail=MagicMock(), sheets=sheets, wp=wp, checker=checker,
         generator=MagicMock(), scorer=MagicMock(), gate=MagicMock(),

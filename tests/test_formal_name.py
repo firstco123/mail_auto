@@ -106,8 +106,8 @@ class TestDisplayedNameInMail(unittest.TestCase):
             raw_body="", is_vacant=True, matched_property=prop)
         _, body = EmailAssembler({"staff_name": "担当"}, True).build_first_mail_parts(
             inquiry, "紹介文", "", [])
-        self.assertIn("物件名：オリーブ201", body)
-        self.assertNotIn("物件名：都市の利便性", body)
+        self.assertIn("物件名／タイトル：オリーブ201", body)
+        self.assertNotIn("物件名／タイトル：都市の利便性", body)
 
     def test_recommendations_keep_their_titles(self):
         from datetime import datetime

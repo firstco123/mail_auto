@@ -115,6 +115,22 @@ class SheetsClient:
         self._retry(lambda: ws.append_row(inquiry.to_sheets_row(), value_input_option="RAW"))
         logger.info("Wrote inquiry %s to Sheets", inquiry.id)
 
+    def delete_inquiry_row(self, inquiry_id: str) -> bool:
+        """Remove a row so its mail is treated as never processed.
+
+        Used only when a check could not run at all. The row is written before
+        screening, so a transient failure would otherwise leave an inquiry
+        recorded-and-rejected — and a recorded Message-ID is skipped forever,
+        so it would never be retried once the cause was fixed.
+        """
+        row = self.find_inquiry_row(inquiry_id)
+        if row is None:
+            return False
+        ws = self._ws("inquiries")
+        self._retry(lambda: ws.delete_rows(row))
+        logger.info("Removed inquiry row %s so the mail is retried", inquiry_id)
+        return True
+
     def find_inquiry_row(self, inquiry_id: str) -> int | None:
         """Return 1-based row index for the given inquiry ID, or None."""
         ws = self._ws("inquiries")

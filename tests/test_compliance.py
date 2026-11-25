@@ -189,7 +189,7 @@ class TestDealTypeDisplayToggle(unittest.TestCase):
     def test_the_property_name_and_url_survive_being_switched_off(self):
         _, body = EmailAssembler(CO, True, show_deal_type=False).build_first_mail_parts(
             _inq(_prop("媒介（一般）")), "紹介文", "", [])
-        self.assertIn("物件名：物件A", body)
+        self.assertIn("物件名／タイトル：物件A", body)
         self.assertIn("https://x/p/", body)
 
     def test_follow_ups_honour_the_switch(self):

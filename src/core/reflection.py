@@ -46,6 +46,9 @@ class Reflection:
     property_name: str = ""
     property_url: str = ""
     inquiry_text: str = ""         # what the customer actually asked, for the AI
+    # The post ID the operator typed into SUUMO's 貴社物件コード. When present it
+    # names the listing exactly, so no name or attribute guessing is needed.
+    site_post_id: str = ""
     extras: dict = field(default_factory=dict)
 
 
@@ -78,11 +81,23 @@ def _looks_like_suumo(sender: str, subject: str) -> bool:
     return any(h in subject for h in _SUUMO_SUBJECT_HINTS) and "反響" in subject
 
 
+def _site_post_id(body: str) -> str:
+    """The WordPress post ID from 貴社物件コード, when the operator set one.
+
+    SUUMO echoes this field back in every 反響 whether or not it is filled, so
+    a blank — or anything that is not a bare post ID — simply means "not
+    registered" and leaves the usual name matching in charge.
+    """
+    value = _field(body, "貴社物件コード", "貴社物件コード1", "貴社管理コード1")
+    return value if re.fullmatch(r"\d{1,12}", value) else ""
+
+
 def _parse_suumo(body: str) -> Reflection:
     name = _field(body, "名前(漢字)", "名前（漢字）", "お名前", "名前")
     return Reflection(
         source="suumo",
         customer_name=name,
+        site_post_id=_site_post_id(body),
         customer_email=_field(body, "メールアドレス", "Email", "E-mail"),
         property_name=_field(body, "物件名"),
         property_url="",           # SUUMO links to suumo.jp; match by name instead

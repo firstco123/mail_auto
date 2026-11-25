@@ -141,7 +141,7 @@ class EmailAssembler:
             commission = ("\n※弊社でのご成約の場合、仲介手数料無料でご案内させていただいております。\n"
                           if prop.is_commission_free else "")
             return (f"◆お問い合わせ物件\n"
-                    f"物件名：{inquiry.inquiry_property_name or prop.name}\n"
+                    f"物件名／タイトル：{inquiry.inquiry_property_name or prop.name}\n"
                     f"{prop.url}{self._deal_line(prop)}\n"
                     f"{_INITIAL_COST_NOTE}{commission}\n\n"
                     f"{property_intro}")
@@ -310,7 +310,7 @@ class EmailAssembler:
             free = "（仲介手数料無料）" if prop.is_commission_free else ""
             blocks.append(
                 f"◆おすすめ物件{free}\n"
-                f"物件名：{prop.name}\n"
+                f"物件名／タイトル：{prop.name}\n"
                 f"{prop.url}\n\n"
                 f"{intro}"
             )
@@ -354,7 +354,7 @@ class EmailAssembler:
                 # The formal name as it appeared in the enquiry. The post title
                 # is marketing copy and is not what the customer saw on the
                 # portal. Recommendations below keep their titles, as asked.
-                f"物件名：{inquiry.inquiry_property_name or prop.name}\n"
+                f"物件名／タイトル：{inquiry.inquiry_property_name or prop.name}\n"
                 f"{prop.url}{self._deal_line(prop)}\n"
                 f"{_INITIAL_COST_NOTE}{commission}\n\n"
                 f"{property_intro}\n"
@@ -383,7 +383,7 @@ class EmailAssembler:
             commission = "（仲介手数料無料）" if prop.is_commission_free else ""
             alt_blocks.append(
                 f"◆おすすめ物件{commission}\n"
-                f"物件名：{prop.name}\n"
+                f"物件名／タイトル：{prop.name}\n"
                 f"{prop.url}\n\n"
                 f"{intro}"
             )

@@ -255,6 +255,22 @@ class WordPressClient:
                 return p
         return None
 
+    def get_property_by_post_id(self, post_id: str | int) -> Property | None:
+        """Return the listing with this WordPress post ID.
+
+        Used for SUUMO's 貴社物件コード, which the operator fills with the post
+        ID. An ID that matches nothing is treated as absent rather than as a
+        match failure — the listing may simply not be published yet.
+        """
+        try:
+            wanted = int(str(post_id).strip())
+        except (TypeError, ValueError):
+            return None
+        for p in self._properties:
+            if p.wp_id == wanted:
+                return p
+        return None
+
     def resolve_by_formal_name(self, name: str) -> tuple[Property | None, str]:
         """Resolve a portal-supplied formal name such as サンステージエクセル203.
 

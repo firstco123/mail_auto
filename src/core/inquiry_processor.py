@@ -200,9 +200,15 @@ class InquiryProcessor:
         if ai_status != self._last_ai_status:
             self._sheets.set_config("AI判定状態", ai_status,
                                     "差別表現チェックの実行状況（システムが自動更新）")
+            if self._last_ai_status is not None:
+                # Only on a change, and never on the first cycle after a restart
+                # — otherwise every deploy would mail during an ongoing outage.
+                self._notify_admin("AI判定", ai_status)
             self._last_ai_status = ai_status
 
         if status != self._last_template_status:
+            if self._last_template_status is not None:
+                self._notify_admin("テンプレート", status)
             # Written only on change: the panel reads this, and rewriting an
             # unchanged cell every five minutes is pointless Sheets traffic.
             self._sheets.set_config(self.TEMPLATE_STATUS_KEY, status,
@@ -214,6 +220,61 @@ class InquiryProcessor:
                          "; ".join(blocking))
             return False
         return True
+
+    def _defer_unjudged(self, inquiry: Inquiry, stage: str,
+                        seen_ids: set[str] | None = None) -> None:
+        """Put an inquiry back rather than recording it as rejected.
+
+        A check that could not run says nothing about the mail. Leaving the row
+        as NG検出 would be a verdict we never reached, and worse, a recorded
+        Message-ID is skipped on every later cycle — so the inquiry would stay
+        stuck after the cause was fixed. Removing the row returns it to the
+        state of not yet processed, and the next cycle picks it up from the
+        mailbox once judgement is possible again.
+        """
+        logger.warning("Inquiry %s could not be judged (%s) — deferring to a "
+                       "later cycle", inquiry.id, stage)
+        try:
+            self._sheets.delete_inquiry_row(inquiry.id)
+        except Exception:
+            # Left in place: still visible to staff, just not auto-retried.
+            logger.exception("Could not defer inquiry %s", inquiry.id)
+            return
+        # Let this cycle's dedup forget it too, or the same mail appearing again
+        # in this batch would be skipped as already recorded.
+        if seen_ids is not None:
+            seen_ids.discard((inquiry.message_id or "").strip())
+
+    def _notify_admin(self, subject_tag: str, status: str) -> None:
+        """Mail the operator when a system-level status changes.
+
+        The panel banner only helps someone who happens to open the panel. An
+        exhausted API key halts every reply, so it has to reach a person who is
+        not looking. Sent on transitions only, so a lasting fault does not mail
+        every five minutes.
+        """
+        try:
+            to = self._sheets.read_config_value("通知先メールアドレス")
+        except Exception:
+            logger.exception("Could not read the notification address")
+            return
+        if not to.strip():
+            return
+
+        recovered = status == self._TEMPLATE_OK
+        subject = (f"【反響メール自動化】{subject_tag}が復旧しました" if recovered
+                   else f"【反響メール自動化】{subject_tag}に問題が発生しています")
+        body = (f"{subject_tag}の状態が変化しましたのでお知らせします。\n\n"
+                f"現在の状態：{status}\n\n"
+                "管理画面： http://49.212.137.14/\n\n"
+                "※このメールはシステムが自動送信しています。")
+        try:
+            self._gmail.send(to.strip(), subject,
+                             EmailAssembler.wrap_html(body), "")
+            logger.info("Notified %s: %s", to.strip(), subject)
+        except Exception:
+            # Never let a failed notice break the cycle that raised it.
+            logger.exception("Could not send the admin notification")
 
     def _refresh_listings(self) -> None:
         """Re-read WordPress when the cached listings have aged out.
@@ -342,6 +403,9 @@ class InquiryProcessor:
 
         # ── Step 4: check incoming email body ────────────────────────────────
         body_check = self._checker.check(inquiry.raw_body)
+        if body_check.check_failed:
+            self._defer_unjudged(inquiry, "受信メール", seen_ids)
+            return
         if not body_check.is_clean:
             inquiry.ng_hits = body_check.ng_hits
             inquiry.discriminatory_flag = body_check.discriminatory
@@ -391,6 +455,9 @@ class InquiryProcessor:
         # draft forever and nothing could ever be sent. Spec 17-2 asks for the
         # AI-generated reply text to be screened, which is exactly this.
         draft_check = self._checker.check_generated(ai_segments)
+        if draft_check.check_failed:
+            self._defer_unjudged(inquiry, "AI生成文", seen_ids)
+            return
         if not draft_check.is_clean:
             inquiry.discriminatory_flag = draft_check.discriminatory
             self._sheets.update_status(inquiry.id, "NG検出")
@@ -495,10 +562,24 @@ class InquiryProcessor:
         introduces the building without naming a room we cannot confirm.
         """
         prop = None
-        if inquiry.inquiry_property_url:
+        display = ""
+
+        # 貴社物件コード names the listing outright, so it is tried before any
+        # name or attribute matching. A code that matches nothing is treated as
+        # unregistered and falls through to the usual route rather than failing
+        # the inquiry: the listing may not be published, or the code mistyped.
+        code = getattr(reflection, "site_post_id", "") if reflection else ""
+        if code:
+            prop = self._wp.get_property_by_post_id(code)
+            if prop is not None:
+                logger.info("Inquiry %s matched by 貴社物件コード %s", inquiry.id, code)
+            else:
+                logger.warning("貴社物件コード %s on inquiry %s matches no listing "
+                               "— falling back to name matching", code, inquiry.id)
+
+        if prop is None and inquiry.inquiry_property_url:
             prop = self._wp.get_property_by_url(inquiry.inquiry_property_url)
 
-        display = ""
         if prop is None and inquiry.inquiry_property_name:
             prop, display = self._wp.resolve_by_formal_name(inquiry.inquiry_property_name)
 
