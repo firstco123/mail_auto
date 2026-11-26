@@ -156,11 +156,10 @@ def _accepts(agree: set[str]) -> bool:
             and bool(agree & {"沿線・駅", "エリア"}))
 
 
-def match(reflection, properties: list[Property]) -> Match | None:
-    """Best attribute match for a portal reflection, or None if unconvincing."""
+def _wanted(reflection) -> dict:
     extras = getattr(reflection, "extras", {}) or {}
     name = reflection.property_name or ""
-    want = {
+    return {
         "room": room_key(room_from_name(name)),
         "layout": layout_key(extras.get("間取り", "")),
         "area": area_sqm(extras.get("専有面積", "")),
@@ -168,6 +167,43 @@ def match(reflection, properties: list[Property]) -> Match | None:
         "stations": station_names(extras.get("最寄り駅", "")),
         "city": area_mod.city_from_address(extras.get("所在地", "")),
     }
+
+
+# Attributes robust enough to judge a registered 貴社物件コード by. 物件名 is
+# excluded on purpose: the portal writes katakana where the site often writes
+# romaji, so a name mismatch is routine and says nothing about the code.
+_VERIFIABLE = ("部屋番号", "間取り", "専有面積", "賃料")
+
+
+def contradicts(reflection, prop: Property) -> tuple[bool, str]:
+    """Does this listing disagree with everything the reflection states?
+
+    Used to catch a 貴社物件コード pointing at the wrong post. The test is
+    deliberately one-sided: agreement on a single attribute is enough to accept
+    the code, and a verdict is only reached when at least two attributes could
+    actually be compared. A listing that simply records little is not evidence
+    of a wrong code.
+    """
+    want = _wanted(reflection)
+    comparable = {
+        "部屋番号": bool(want["room"] and prop.room_number),
+        "間取り": bool(want["layout"] and prop.layout),
+        "専有面積": bool(want["area"] and prop.area_sqm),
+        "賃料": bool(want["rent"] and prop.rent),
+    }
+    checked = [k for k in _VERIFIABLE if comparable[k]]
+    if len(checked) < 2:
+        return False, ""
+    agree = _signals(prop, want) & set(checked)
+    if agree:
+        return False, ""
+    return True, "・".join(checked)
+
+
+def match(reflection, properties: list[Property]) -> Match | None:
+    """Best attribute match for a portal reflection, or None if unconvincing."""
+    name = reflection.property_name or ""
+    want = _wanted(reflection)
     if not any((want["layout"], want["area"], want["rent"])):
         return None
 

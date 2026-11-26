@@ -23,7 +23,8 @@ _DESIGNER_KEYWORDS = {"デザイナーズ", "リノベーション", "ガレー�
 # frame with no columns at all and every lookup below would raise KeyError.
 _DF_COLUMNS = [
     "idx", "wp_id", "name", "url", "rent", "management_fee", "layout",
-    "nearest_station", "train_line", "city", "walk_minutes", "category_str",
+    "nearest_station", "train_line", "stations", "train_lines",
+    "city", "walk_minutes", "category_str",
     "equipment_str", "is_vacant", "is_commission_free", "area_sqm",
     "building_type", "ptype",
 ]
@@ -74,6 +75,13 @@ class PropertyScorer:
             "layout": p.layout,
             "nearest_station": p.nearest_station,
             "train_line": p.train_line,
+            # A listing sits on every line and station it is tagged with, so
+            # the single-valued fields above would miss a genuine match on the
+            # second of them.
+            "stations": frozenset(p.stations or ([p.nearest_station]
+                                                 if p.nearest_station else [])),
+            "train_lines": frozenset(p.train_lines or ([p.train_line]
+                                                       if p.train_line else [])),
             "city": p.city,
             "walk_minutes": p.walk_minutes,
             "category_str": " ".join(p.category),
@@ -111,11 +119,18 @@ class PropertyScorer:
         df["score"] = 0
 
         # ── Priority 1: same nearest station ───────────────────────────────
-        same_station = df["nearest_station"] == inquiry_property.nearest_station
+        # An unknown station must not count as a match. Comparing the scalar
+        # fields made "" == "" true for every candidate, which handed out this
+        # tier unconditionally and suppressed the 沿線 tier underneath it.
+        want_stations = frozenset(inquiry_property.stations or (
+            [inquiry_property.nearest_station] if inquiry_property.nearest_station else []))
+        want_lines = frozenset(inquiry_property.train_lines or (
+            [inquiry_property.train_line] if inquiry_property.train_line else []))
+        same_station = df["stations"].apply(lambda s: bool(s & want_stations))
         df.loc[same_station, "score"] += 100
 
         # ── Priority 2: same train line ────────────────────────────────────
-        same_line = df["train_line"] == inquiry_property.train_line
+        same_line = df["train_lines"].apply(lambda s: bool(s & want_lines))
         df.loc[same_line & ~same_station, "score"] += 60
 
         # ── Priority 3: same city ──────────────────────────────────────────

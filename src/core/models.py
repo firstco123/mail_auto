@@ -53,6 +53,12 @@ class Property:
     # 宅建業法第34条の取引態様。安全に断定できない場合は空のままとし、
     # 誤った態様を表示するより記載しないことを選ぶ。
     deal_type: str = ""
+    # The `train` taxonomy is three deep — 事業者 → 路線 → 駅 — and a listing
+    # carries several terms from it. `nearest_station`/`train_line` keep the
+    # first of each only because they are single-valued; a property on two
+    # lines really does sit on both, so scoring reads these instead.
+    stations: list[str] = field(default_factory=list)
+    train_lines: list[str] = field(default_factory=list)
 
     @property
     def rent_total(self) -> int:

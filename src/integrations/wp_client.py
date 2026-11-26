@@ -101,6 +101,11 @@ def _room_number(floor: str | None) -> str:
     return re.split(r"[(（\s]", text, maxsplit=1)[0].strip()
 
 
+def _norm_address(address: str) -> str:
+    """Compare addresses without being tripped by spacing or digit width."""
+    return re.sub(r"[\s　]", "", unicodedata.normalize("NFKC", address or ""))
+
+
 def formal_key(name: str) -> str:
     """Comparison key for a formal property name.
 
@@ -171,6 +176,9 @@ class WordPressClient:
 
         # caches populated by load_all()
         self._term_cache: dict[str, dict[int, str]] = {}
+        # term id → parent id, per taxonomy. Only `train` is hierarchical, but
+        # the depth is what tells a 駅 from a 路線 and nothing else records it.
+        self._term_parent: dict[str, dict[int, int]] = {}
         self._properties: list[Property] = []
         self._loaded_at: datetime | None = None
 
@@ -311,6 +319,23 @@ class WordPressClient:
                 return self._best(exact_room), name.strip()
 
         # Building only: say the building and drop the room we cannot confirm.
+        #
+        # Those candidates are rooms of one building in the ordinary case, which
+        # is fine — but two genuinely different buildings can share a name stem,
+        # and picking between them by WordPress load order would describe the
+        # wrong building's rent and vacancy to a customer. Distinct addresses or
+        # cities are what tells them apart; when they disagree, say nothing and
+        # let attribute matching, which has its own ambiguity guard, decide.
+        places = {(p.city or "", _norm_address(p.address)) for p in same_building
+                  if p.city or p.address}
+        if len(places) > 1:
+            logger.warning(
+                "Formal name 「%s」 matches %d buildings in different places (%s) "
+                "— returning no match rather than guessing",
+                name, len(places),
+                ", ".join(sorted(c or a for c, a in places)))
+            return None, ""
+
         display = _ROOM_SUFFIX.sub("", unicodedata.normalize("NFKC", name)).strip(" 　_-・")
         return self._best(same_building), display or name.strip()
 
@@ -366,11 +391,12 @@ class WordPressClient:
             try:
                 # Paginate to get all terms (some taxonomies have > 100 terms)
                 all_terms: dict[int, str] = {}
+                parents: dict[int, int] = {}
                 page = 1
                 while True:
                     terms = self._get(f"/wp-json/wp/v2/{slug}",
                                       params={"per_page": 100, "page": page,
-                                              "_fields": "id,name"})
+                                              "_fields": "id,name,parent"})
                     if not terms:
                         break
                     for t in terms:
@@ -378,14 +404,17 @@ class WordPressClient:
                         # named 「&(アンパサンド)」 arrives as 「&amp;(アンパサンド)」
                         # and would reach a customer that way.
                         all_terms[t["id"]] = html.unescape(t["name"])
+                        parents[t["id"]] = int(t.get("parent") or 0)
                     if len(terms) < 100:
                         break
                     page += 1
                 self._term_cache[slug] = all_terms
+                self._term_parent[slug] = parents
                 logger.debug("Cached %d terms for taxonomy '%s'", len(all_terms), slug)
             except Exception as e:
                 logger.warning("Could not load taxonomy '%s': %s", slug, e)
                 self._term_cache[slug] = {}
+                self._term_parent[slug] = {}
 
     def _get(self, path: str, params: dict | None = None) -> list | dict:
         url = self._base + path
@@ -404,6 +433,41 @@ class WordPressClient:
         return []
 
     # ── normalisation ────────────────────────────────────────────────────────
+
+    def _split_rail(self, slug: str, raw: dict) -> tuple[list[str], list[str]]:
+        """Separate 路線 from 駅 in the `train` taxonomy.
+
+        The taxonomy is three deep — 事業者 → 路線 → 駅 — and a listing carries
+        terms from every level in no particular order. Reading the first term
+        as the line therefore recorded a station name about as often as a line,
+        and the station was never recorded at all: `nearest_station` stayed ""
+        for all 2,025 listings, so the scorer's "same station" test compared
+        "" with "" and awarded its 100 points to every candidate, while the
+        "same line" tier below it could never fire. Depth is the only thing
+        that tells the levels apart.
+        """
+        names = getattr(self, "_term_cache", {}).get(slug, {})
+        parents = getattr(self, "_term_parent", {}).get(slug, {})
+
+        def depth(tid: int) -> int:
+            seen, n = set(), 0
+            while parents.get(tid) and tid not in seen:
+                seen.add(tid)          # a cycle in the data must not hang us
+                tid = parents[tid]
+                n += 1
+            return n
+
+        lines, stations = [], []
+        for tid in raw.get(slug, []) or []:
+            if tid not in names:
+                continue
+            d = depth(tid)
+            if d == 1:
+                lines.append(names[tid])
+            elif d >= 2:
+                stations.append(names[tid])
+        # dict.fromkeys dedupes while keeping the order WordPress returned
+        return list(dict.fromkeys(lines)), list(dict.fromkeys(stations))
 
     def _to_property(self, raw: dict) -> Property:
         acf = raw.get("acf", {}) or {}
@@ -432,7 +496,9 @@ class WordPressClient:
             cache = self._term_cache.get(slug, {})
             return [cache[i] for i in ids if i in cache]
 
-        train_names = tax_names(self._tcfg.get("train_line", "train"))
+        train_slug = self._tcfg.get("train_line", "train")
+        train_names = tax_names(train_slug)
+        line_names, station_names = self._split_rail(train_slug, raw)
         area_names = tax_names(self._tcfg.get("area", "area"))
         building_names = tax_names(self._tcfg.get("building_type", "building"))
 
@@ -457,8 +523,13 @@ class WordPressClient:
             rent=_int(acf_get("rent", 0)),
             management_fee=_int(acf_get("management_fee", 0)),
             layout=layout,
-            nearest_station="",    # station name comes from train taxonomy terms
-            train_line=train_names[0] if train_names else "",
+            nearest_station=station_names[0] if station_names else "",
+            # Falls back to whatever the taxonomy gave when the hierarchy is
+            # unreadable, which is what this held before the depth was known.
+            train_line=(line_names[0] if line_names
+                        else (train_names[0] if train_names else "")),
+            stations=station_names,
+            train_lines=line_names,
             city=area_names[0] if area_names else "",
             walk_minutes=walk_minutes,
             category=list(dict.fromkeys(cat_names)),   # deduplicate, preserve order

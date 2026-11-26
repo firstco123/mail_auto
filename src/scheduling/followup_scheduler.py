@@ -273,6 +273,26 @@ class FollowupScheduler:
             category=[], equipment=[], is_vacant=False, is_commission_free=False,
             area_sqm=0.0, building_type="",
         )
-        alts = self._scorer.find_alternatives(base, top_n=3)
+        # Confirm each suggestion against WordPress right now. The first mail
+        # already does this; a follow-up goes out days later, so its snapshot is
+        # the staler of the two and proposing a room that has since gone is the
+        # same error — only here we are the ones who chose it.
+        alts = [a for a in self._scorer.find_alternatives(base, top_n=3)
+                if self._still_vacant(a)]
         alt_intros = [(a, self._generator.generate_alt_intro(prop or a, a)) for a in alts]
         return "", invitation, alt_intros
+
+    def _still_vacant(self, alt: Property) -> bool:
+        """An unreadable listing keeps the snapshot's view rather than vanishing."""
+        try:
+            fresh = self._wp.refetch_one(alt.wp_id)
+        except Exception as e:
+            logger.warning("Could not re-check vacancy for %s: %s",
+                           alt.building_name or alt.name, e)
+            return True
+        if fresh is None:
+            return True
+        if not fresh.is_vacant:
+            logger.info("Dropping %s from follow-up suggestions — no longer vacant",
+                        alt.building_name or alt.name)
+        return fresh.is_vacant

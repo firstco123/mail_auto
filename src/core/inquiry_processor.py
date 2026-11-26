@@ -550,6 +550,20 @@ class InquiryProcessor:
             area_sqm=0.0, building_type="",
         )
 
+    def _flag_for_review(self, inquiry: Inquiry, reason: str) -> None:
+        """Hold the inquiry for a human and record why.
+
+        Setting the status on the object as well as in the sheet matters: the
+        send gate blocks on inquiry.status, so this is what actually stops the
+        mail rather than merely annotating it after the fact.
+        """
+        inquiry.status = "要確認"
+        try:
+            self._sheets.update_status(inquiry.id, "要確認")
+            self._sheets.write_review_log(inquiry.id, reason, "")
+        except Exception as e:
+            logger.error("Could not record review flag for %s: %s", inquiry.id, e)
+
     def _lookup_property(self, inquiry: Inquiry,
                          reflection: Reflection | None = None
                          ) -> tuple[Property | None, bool | None]:
@@ -571,11 +585,25 @@ class InquiryProcessor:
         code = getattr(reflection, "site_post_id", "") if reflection else ""
         if code:
             prop = self._wp.get_property_by_post_id(code)
-            if prop is not None:
-                logger.info("Inquiry %s matched by 貴社物件コード %s", inquiry.id, code)
-            else:
+            if prop is None:
                 logger.warning("貴社物件コード %s on inquiry %s matches no listing "
                                "— falling back to name matching", code, inquiry.id)
+            else:
+                # A code typed against the wrong listing would otherwise be
+                # trusted absolutely, and describe a flat the customer never
+                # asked about. Check it against what the portal itself states.
+                wrong, checked = portal_matcher.contradicts(reflection, prop)
+                if wrong:
+                    logger.error(
+                        "貴社物件コード %s on inquiry %s points at 「%s」, which "
+                        "disagrees with the reflection on %s — holding for review",
+                        code, inquiry.id, prop.building_name or prop.name, checked)
+                    self._flag_for_review(
+                        inquiry,
+                        f"貴社物件コード{code}の物件と反響内容が一致しません"
+                        f"（{checked}が不一致）")
+                    return None, None
+                logger.info("Inquiry %s matched by 貴社物件コード %s", inquiry.id, code)
 
         if prop is None and inquiry.inquiry_property_url:
             prop = self._wp.get_property_by_url(inquiry.inquiry_property_url)
